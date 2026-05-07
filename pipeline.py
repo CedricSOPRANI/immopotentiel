@@ -42,7 +42,7 @@ load_dotenv()
 
 CONFIG = {
     # Heure d'extraction quotidienne
-    "heure_extraction": "10:00",
+    "heure_extraction": "07:00",
 
     # Régions et zones (rayon 40km)
         "zones": {
@@ -788,7 +788,7 @@ def generer_html_email(annonces: list[dict]) -> str:
     </div>
 
     <!-- Lien -->
-    {'<a href="' + a.get("url","#") + '" style="display:inline-block;margin-top:8px;font-size:11px;color:#2cb4f5;">Voir l annonce →</a>' if a.get("url") else ""}
+    {'<a href="' + a.get("url","#") + '" style="display:inline-block;margin-top:8px;font-size:11px;color:#2cb4f5;">Voir l\'annonce →</a>' if a.get("url") else ""}
   </td>
 </tr>"""
 
@@ -896,8 +896,12 @@ def envoyer_email(annonces: list[dict]) -> None:
 
 def sauvegarder_digest(annonces: list[dict]) -> None:
     """
-    Sauvegarde le digest en JSON pour que l'app React puisse le lire.
-    En production : uploader vers un CDN ou une API.
+    Sauvegarde le digest en JSON localement ET l'uploade vers JSONBin.io
+    pour que l'app React puisse le lire en temps réel.
+
+    Variable d'environnement requise :
+      JSONBIN_KEY=votre-master-key-jsonbin
+      JSONBIN_BIN_ID=votre-bin-id (créé automatiquement au 1er run)
     """
     digest = {
         "date":       datetime.now().isoformat(),
@@ -911,12 +915,63 @@ def sauvegarder_digest(annonces: list[dict]) -> None:
         "annonces": annonces,
     }
 
+    # 1. Sauvegarde locale
     path = "digest_latest.json"
     with open(path, "w", encoding="utf-8") as f:
         json.dump(digest, f, ensure_ascii=False, indent=2)
+    print(f"💾 Digest sauvegardé localement → {path}")
 
-    print(f"💾 Digest sauvegardé → {path}")
-    print(f"   → En production : uploader vers https://votre-api.com/digest")
+    # 2. Upload vers JSONBin.io
+    jsonbin_key    = os.getenv("JSONBIN_KEY", "")
+    jsonbin_bin_id = os.getenv("JSONBIN_BIN_ID", "")
+
+    if not jsonbin_key:
+        print("⚠️  JSONBIN_KEY manquant — digest non uploadé en ligne")
+        return
+
+    headers = {
+        "Content-Type":  "application/json",
+        "X-Master-Key":  jsonbin_key,
+        "X-Bin-Private": "false",   # public = lisible par l'app sans auth
+    }
+
+    try:
+        if jsonbin_bin_id:
+            # Mettre à jour le bin existant
+            r = requests.put(
+                f"https://api.jsonbin.io/v3/b/{jsonbin_bin_id}",
+                headers=headers,
+                json=digest,
+                timeout=15,
+            )
+            if r.status_code == 200:
+                url = f"https://api.jsonbin.io/v3/b/{jsonbin_bin_id}/latest"
+                print(f"✅ Digest uploadé → {url}")
+            else:
+                print(f"⚠️  JSONBin update échoué ({r.status_code}): {r.text[:200]}")
+        else:
+            # Créer un nouveau bin au 1er run
+            headers["X-Bin-Name"] = "immopotentiel-digest"
+            r = requests.post(
+                "https://api.jsonbin.io/v3/b",
+                headers=headers,
+                json=digest,
+                timeout=15,
+            )
+            if r.status_code == 200:
+                data       = r.json()
+                bin_id     = data["metadata"]["id"]
+                url        = f"https://api.jsonbin.io/v3/b/{bin_id}/latest"
+                print(f"✅ Nouveau bin créé → {url}")
+                print(f"   ⚠️  Ajoutez JSONBIN_BIN_ID={bin_id} dans vos variables Railway !")
+                # Sauvegarder le bin_id localement pour info
+                with open("jsonbin_id.txt", "w") as f:
+                    f.write(bin_id)
+            else:
+                print(f"⚠️  JSONBin création échouée ({r.status_code}): {r.text[:200]}")
+
+    except requests.RequestException as e:
+        print(f"⚠️  JSONBin erreur réseau: {e}")
 
 
 # ═══════════════════════════════════════════════════════════════════
