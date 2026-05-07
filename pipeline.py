@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ╔══════════════════════════════════════════════════════════════════╗
-║          ImmoPotentiel — Pipeline d'extraction automatique        ║
+║          ImmoPotentiel — Pipeline d'extraction automatique        ║ 
 ║  Scraping réel · Analyse Claude IA · Push mobile · Email digest  ║
 ╚══════════════════════════════════════════════════════════════════╝
 
