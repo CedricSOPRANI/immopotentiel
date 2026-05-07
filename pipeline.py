@@ -788,7 +788,7 @@ def generer_html_email(annonces: list[dict]) -> str:
     </div>
 
     <!-- Lien -->
-    {'<a href="' + a.get("url","#") + '" style="display:inline-block;margin-top:8px;font-size:11px;color:#2cb4f5;">Voir l\'annonce →</a>' if a.get("url") else ""}
+    {'<a href="' + a.get("url","#") + '" style="display:inline-block;margin-top:8px;font-size:11px;color:#2cb4f5;">Voir l annonce →</a>' if a.get("url") else ""}
   </td>
 </tr>"""
 
