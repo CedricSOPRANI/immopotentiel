@@ -42,7 +42,7 @@ load_dotenv()
 
 CONFIG = {
     # Heure d'extraction quotidienne
-    "heure_extraction": "07:00",
+    "heure_extraction": "10:00",
 
     # Régions et zones (rayon 40km)
         "zones": {
