@@ -281,9 +281,9 @@ async def scrape_leboncoin(ville: str, page) -> list[dict]:
         await page.goto(url, wait_until="networkidle", timeout=30000)
         await page.wait_for_timeout(2000)
 
-        cards = await page.query_selector_all("[data-test-id='ad'], article[data-qa-id='aditem_container']")
+        s = await page.query_selector_all("[data-test-id='ad'], article[data-qa-id='aditem_container']")
 
-        for card in cards[:10]:
+        for  in cards[:10]:
             try:
                 titre_el = await card.query_selector("h2, [data-qa-id='aditem_title']")
                 prix_el  = await card.query_selector("[data-qa-id='aditem_price'], [data-test-id='price']")
@@ -701,6 +701,10 @@ def generer_html_email(annonces: list[dict]) -> str:
             f'🏗️ {a.get("parcelles_possibles",0)} PARCELLES</span> '
             if a.get("parcelles_possibles", 0) > 0 else ""
         )
+        sep = ' - '
+        surface_terrain = a.get('surface_terrain', 0)
+        terrain_str = f' + terrain {surface_terrain:,}m²' if surface_terrain > 0 else ''
+        signaux_str = sep.join(a.get('signaux', [])[:3])
 
         rows += f"""
 <tr style="border-bottom:1px solid #1e2d40;">
@@ -713,7 +717,7 @@ def generer_html_email(annonces: list[dict]) -> str:
         </div>
         <div style="font-size:11px;color:#3d5470;">
           {a.get('type','—')} · {a.get('surface',0)}m²
-          {f" + terrain {a.get('surface_terrain',0):,}m²" if a.get('surface_terrain',0)>0 else ""}
+          {terrain_str}
           · {a.get('source','—')} · {a.get('anciennete',0)}j en ligne
         </div>
       </div>
@@ -785,7 +789,7 @@ def generer_html_email(annonces: list[dict]) -> str:
 
     <!-- Signaux -->
     <div style="font-size:10px;color:#3d5470;">
-      {'  ·  '.join(a.get('signaux',[])[:3])}
+      {sep.join(a.get('signaux',[])[:3])}
     </div>
 
     <!-- Lien -->
