@@ -687,6 +687,7 @@ def generer_html_email(annonces: list[dict]) -> str:
 
     rows = ""
     for i, a in enumerate(annonces[:CONFIG["max_digest"]]):
+        url_link = ('<a href="' + (a.get("url") or "#") + '" style="display:inline-block;margin-top:8px;font-size:11px;color:#2cb4f5;">Voir annonce</a>') if a.get("url") else ""
         c_score    = couleur_score(a.get("score_total", 0))
         c_parcell  = couleur_score(a.get("score_parcellaire", 0))
         retour_tag = (
@@ -788,7 +789,7 @@ def generer_html_email(annonces: list[dict]) -> str:
     </div>
 
     <!-- Lien -->
-    {("<a href='" + a.get("url","#") + "' style='display:inline-block;margin-top:8px;font-size:11px;color:#2cb4f5;'>Voir annonce</a>") if a.get("url") else ""}
+    {url_link}
   </td>
 </tr>"""
 
