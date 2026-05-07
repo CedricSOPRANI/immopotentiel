@@ -281,9 +281,9 @@ async def scrape_leboncoin(ville: str, page) -> list[dict]:
         await page.goto(url, wait_until="networkidle", timeout=30000)
         await page.wait_for_timeout(2000)
 
-        s = await page.query_selector_all("[data-test-id='ad'], article[data-qa-id='aditem_container']")
+        cards = await page.query_selector_all("[data-test-id='ad'], article[data-qa-id='aditem_container']")
 
-        for  in cards[:10]:
+        for card  in cards[:10]:
             try:
                 titre_el = await card.query_selector("h2, [data-qa-id='aditem_title']")
                 prix_el  = await card.query_selector("[data-qa-id='aditem_price'], [data-test-id='price']")
