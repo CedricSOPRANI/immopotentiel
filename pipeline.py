@@ -447,14 +447,25 @@ Surface observée : {annonce['surface']} m²
 """
 
     try:
+        # Ajout instruction JSON pur dans le prompt
+        prompt_json = prompt + "\n\nIMPORTANT: Reponds UNIQUEMENT avec un objet JSON valide, sans markdown, sans texte avant ou apres. Commence directement par { et termine par }."
         message = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=1000,
-            messages=[{"role": "user", "content": prompt}]
+            model="claude-sonnet-4-6",
+            max_tokens=1500,
+            messages=[{"role": "user", "content": prompt_json}]
         )
         txt = message.content[0].text.strip()
         txt = re.sub(r"```json|```", "", txt).strip()
-        result = json.loads(txt)
+        # Extrait le JSON entre la premiere { et la derniere }
+        first_brace = txt.find("{")
+        last_brace = txt.rfind("}")
+        if first_brace >= 0 and last_brace > first_brace:
+            txt = txt[first_brace:last_brace+1]
+        try:
+            result = json.loads(txt)
+        except json.JSONDecodeError as je:
+            print(f"  Debug JSON brut: {txt[:300]}")
+            raise je
 
         # Enrichir avec les calculs MDB
         prix    = result.get("prix", annonce["prix"]) or annonce["prix"]
