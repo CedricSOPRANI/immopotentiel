@@ -33,6 +33,7 @@ from dotenv import load_dotenv
 import requests
 import anthropic
 from playwright.async_api import async_playwright
+from bs4 import BeautifulSoup
 try:
     from playwright_stealth import Stealth
     print("[STEALTH] OK : playwright-stealth charge avec succes")
@@ -213,8 +214,60 @@ def calc_offre(prix: float, revente: float, travaux: int,
 # SCRAPING — SELOGER
 # ═══════════════════════════════════════════════════════════════════
 
+
+# ===================================================================
+# SCRAPING - BIEN ICI (source principale, gratuit)
+# ===================================================================
+
+async def scrape_bienici(ville: str, page) -> list[dict]:
+    """Scrape Bien'ici via Playwright"""
+    annonces = []
+    try:
+        ville_slug = ville.lower().replace(" ", "-").replace("'", "-")
+        url = f"https://www.bienici.com/recherche/achat/{ville_slug}/maisonvilla,appartement,loft,batiment,chateau,hotel?prix-max=3000000&surface-min=80"
+        await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+        await page.wait_for_timeout(5000)
+        html = await page.content()
+        soup = BeautifulSoup(html, "lxml")
+        cards = soup.select("article.ad-overview")
+        for card in cards[:15]:
+            try:
+                data_id = card.get("data-id", "")
+                img = card.select_one("img")
+                alt = img.get("alt", "") if img else ""
+                link = card.select_one("a.detailedSheetLink") or card.select_one("a")
+                href = link.get("href", "") if link else ""
+                lien_complet = f"https://www.bienici.com{href}" if href and not href.startswith("http") else href
+                prix_el = card.select_one(".ad-price__the-price")
+                prix_texte = prix_el.get_text(strip=True) if prix_el else "0"
+                prix_num = int(re.sub(r"[^\d]", "", prix_texte)) if re.search(r"\d", prix_texte) else 0
+                prix_m2_el = card.select_one(".ad-price__price-per-square-meter")
+                prix_m2 = prix_m2_el.get_text(strip=True) if prix_m2_el else ""
+                type_match = re.search(r"(appartement|maison|immeuble|loft|batiment|chateau|hotel)", alt.lower())
+                type_bien = type_match.group(1) if type_match else "bien"
+                surf_match = re.search(r"(\d+)\s*m", alt)
+                surf_num = int(surf_match.group(1)) if surf_match else 0
+                if prix_num > 0 and surf_num >= CONFIG["surface_min_m2"]:
+                    annonces.append({
+                        "source":    "Bien'ici",
+                        "url":       lien_complet,
+                        "titre":     alt or f"{type_bien.capitalize()} {surf_num}m2 - {ville}",
+                        "adresse":   ville,
+                        "prix":      prix_num,
+                        "surface":   surf_num,
+                        "description": f"{alt} | Type:{type_bien} | Prix/m2:{prix_m2} | ID:{data_id}",
+                        "ville":     ville,
+                    })
+            except Exception:
+                continue
+    except Exception as e:
+        print(f"  WARN Bienici {ville}: {e}")
+    return annonces
+
+
 async def scrape_seloger(ville: str, page) -> list[dict]:
-    """Scrape les annonces SeLoger pour une ville donnée"""
+    """SeLoger desactive (URL obsolete)"""
+    return []
     annonces = []
     try:
         # URL de recherche SeLoger (immeuble + maison + terrain)
@@ -579,27 +632,22 @@ async def lancer_pipeline(test_mode: bool = False) -> list[dict]:
             for ville in villes_scan:
                 print(f"  🔍 {ville}...")
                 page = await context.new_page()
-
                 try:
-                    # Scraper les 3 sources
-                    sl  = await scrape_seloger(ville, page)
-                    lbc = await scrape_leboncoin(ville, page)
-                    pap = await scrape_pap(ville, page)
+                    bienici_data = await scrape_bienici(ville, page)
+                    seloger_data = await scrape_seloger(ville, page)
+                    lbc_data     = await scrape_leboncoin(ville, page)
+                    pap_data     = await scrape_pap(ville, page)
 
-                    brutes = sl + lbc + pap
-                    print(f"      → {len(sl)} SeLoger · {len(lbc)} LBC · {len(pap)} PAP")
-
-                    for a in brutes:
+                    for a in bienici_data + seloger_data + lbc_data + pap_data:
                         a["region"] = region
                         a["ville"]  = ville
-                    toutes_annonces_brutes.extend(brutes)
+                        toutes_annonces_brutes.append(a)
 
-                except Exception as e:
-                    print(f"      ⚠️  Erreur scraping {ville}: {e}")
+                    print(f"      → {len(bienici_data)} BienIci · {len(seloger_data)} SeLoger · {len(lbc_data)} LBC · {len(pap_data)} PAP")
                 finally:
                     await page.close()
 
-                # Pause entre villes pour éviter le ban
+                # Pause entre villes
                 await asyncio.sleep(2 if test_mode else 4)
 
         await browser.close()
