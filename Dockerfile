@@ -34,7 +34,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxrandr2 \
     xdg-utils \
     && rm -rf /var/lib/apt/lists/*
-
+    
+# Cache buster 2026-05-11
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
