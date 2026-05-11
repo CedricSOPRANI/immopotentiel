@@ -33,6 +33,7 @@ from dotenv import load_dotenv
 import requests
 import anthropic
 from playwright.async_api import async_playwright
+from playwright_stealth import Stealth
 
 load_dotenv()
 
@@ -218,7 +219,7 @@ async def scrape_seloger(ville: str, page) -> list[dict]:
             f"&surface=80/NaN&places=[{{'label':'{ville}'}}]"
             f"&sort=d_dt_crea&districts=&bedrooms=&rooms="
         )
-        await page.goto(url, wait_until="networkidle", timeout=30000)
+        await page.goto(url, wait_until="networkidle", timeout=60000)
         await page.wait_for_timeout(2000)
 
         cards = await page.query_selector_all("[data-testid='sl.explore.resultsItem']")
@@ -278,7 +279,7 @@ async def scrape_leboncoin(ville: str, page) -> list[dict]:
             f"category=9&locations={ville}&real_estate_type=1,2,3,4"
             f"&price=min-3000000&square=80-max&sort=time&order=desc"
         )
-        await page.goto(url, wait_until="networkidle", timeout=30000)
+        await page.goto(url, wait_until="networkidle", timeout=60000)
         await page.wait_for_timeout(2000)
 
         cards = await page.query_selector_all("[data-test-id='ad'], article[data-qa-id='aditem_container']")
@@ -331,7 +332,7 @@ async def scrape_pap(ville: str, page) -> list[dict]:
         ville_slug = ville.lower().replace(" ", "-").replace("'", "-").replace("é", "e").replace("è", "e")
         url = f"https://www.pap.fr/annonce/ventes-immobilieres-{ville_slug}-g{ville_slug}?surface=80&prix=&nb-pieces=&nb-chambres="
 
-        await page.goto(url, wait_until="networkidle", timeout=30000)
+        await page.goto(url, wait_until="networkidle", timeout=60000)
         await page.wait_for_timeout(2000)
 
         cards = await page.query_selector_all(".search-list-item, article.item-list")
@@ -549,16 +550,19 @@ async def lancer_pipeline(test_mode: bool = False) -> list[dict]:
 
     toutes_annonces_brutes = []
 
-    async with async_playwright() as pw:
+    async with Stealth().use_async(async_playwright()) as pw:
         browser = await pw.chromium.launch(
             headless=True,
-            args=["--no-sandbox", "--disable-dev-shm-usage"]
+            args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-blink-features=AutomationControlled"]
         )
         context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                        "AppleWebKit/537.36 (KHTML, like Gecko) "
-                       "Chrome/120.0.0.0 Safari/537.36",
-            viewport={"width": 1280, "height": 720},
+                       "Chrome/131.0.0.0 Safari/537.36",
+            viewport={"width": 1920, "height": 1080},
+            locale="fr-FR",
+            timezone_id="Europe/Paris",
+            extra_http_headers={"Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8"},
         )
 
         for region, villes in CONFIG["zones"].items():
