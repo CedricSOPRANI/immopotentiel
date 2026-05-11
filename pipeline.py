@@ -33,7 +33,12 @@ from dotenv import load_dotenv
 import requests
 import anthropic
 from playwright.async_api import async_playwright
-from playwright_stealth import Stealth
+try:
+    from playwright_stealth import Stealth
+    print("[STEALTH] OK : playwright-stealth charge avec succes")
+except ImportError as e:
+    print(f"[STEALTH] ECHEC : {e}")
+    Stealth = None
 
 load_dotenv()
 
