@@ -150,7 +150,7 @@ CONFIG = {
     "score_total_min":       70,
     "prix_max":              3_000_000,
     "surface_min_m2":        80,
-    "terrain_min_m2":        0,     # 0 = pas de filtre terrain
+    "terrain_min_m2":        800,   # filtre detachement actif
     "anciennete_max_jours":  180,
     "taux_marge_min_pct":    10,
 
@@ -220,44 +220,75 @@ def calc_offre(prix: float, revente: float, travaux: int,
 # ===================================================================
 
 async def scrape_bienici(ville: str, page) -> list[dict]:
-    """Scrape Bien'ici via Playwright"""
+    """Scrape Bien'ici - detachement parcellaire. Terrain fiable, ratio plafonne."""
     annonces = []
     try:
         ville_slug = ville.lower().replace(" ", "-").replace("'", "-")
-        url = f"https://www.bienici.com/recherche/achat/{ville_slug}/maisonvilla,appartement,loft,batiment,chateau,hotel?prix-max=3000000&surface-min=80"
+        url = (f"https://www.bienici.com/recherche/achat/{ville_slug}/"
+               f"maisonvilla,terrain?prix-max=3000000&surface-terrain-min=800")
         await page.goto(url, wait_until="domcontentloaded", timeout=60000)
         await page.wait_for_timeout(5000)
         html = await page.content()
         soup = BeautifulSoup(html, "lxml")
         cards = soup.select("article.ad-overview")
-        for card in cards[:15]:
+        for card in cards[:20]:
             try:
                 data_id = card.get("data-id", "")
-                img = card.select_one("img")
-                alt = img.get("alt", "") if img else ""
                 link = card.select_one("a.detailedSheetLink") or card.select_one("a")
                 href = link.get("href", "") if link else ""
                 lien_complet = f"https://www.bienici.com{href}" if href and not href.startswith("http") else href
+
+                texte = card.get_text(separator=" ", strip=True)
+                tb = texte.lower()
+
                 prix_el = card.select_one(".ad-price__the-price")
                 prix_texte = prix_el.get_text(strip=True) if prix_el else "0"
                 prix_num = int(re.sub(r"[^\d]", "", prix_texte)) if re.search(r"\d", prix_texte) else 0
-                prix_m2_el = card.select_one(".ad-price__price-per-square-meter")
-                prix_m2 = prix_m2_el.get_text(strip=True) if prix_m2_el else ""
-                type_match = re.search(r"(appartement|maison|immeuble|loft|batiment|chateau|hotel)", alt.lower())
-                type_bien = type_match.group(1) if type_match else "bien"
-                surf_match = re.search(r"(\d+)\s*m", alt)
-                surf_num = int(surf_match.group(1)) if surf_match else 0
-                if prix_num > 0 and surf_num >= CONFIG["surface_min_m2"]:
-                    annonces.append({
-                        "source":    "Bien'ici",
-                        "url":       lien_complet,
-                        "titre":     alt or f"{type_bien.capitalize()} {surf_num}m2 - {ville}",
-                        "adresse":   ville,
-                        "prix":      prix_num,
-                        "surface":   surf_num,
-                        "description": f"{alt} | Type:{type_bien} | Prix/m2:{prix_m2} | ID:{data_id}",
-                        "ville":     ville,
-                    })
+
+                type_match = re.search(r"(maison|terrain|villa)", tb)
+                type_bien = "Terrain" if (type_match and type_match.group(1) == "terrain") else "Maison"
+
+                # Surface habitable
+                surf_num = 0
+                mh = re.search(r"(\d[\d\s]{1,5})\s*m[2\u00b2]\s*habitable", tb)
+                if mh:
+                    surf_num = int(re.sub(r"[^\d]", "", mh.group(1)))
+                else:
+                    mh2 = re.search(r"pi[e\u00e8]ces?\s*(\d[\d\s]{1,5})\s*m[2\u00b2]", tb)
+                    if mh2:
+                        surf_num = int(re.sub(r"[^\d]", "", mh2.group(1)))
+
+                # Surface terrain : regex strict, 12 car. max
+                terrain_num = 0
+                for m in re.finditer(
+                        r"(?:terrain|parcelle)[^.0-9]{0,12}?(\d[\d\s]{1,6})\s*m[2\u00b2]",
+                        tb):
+                    val = int(re.sub(r"[^\d]", "", m.group(1)))
+                    if 800 <= val <= 50000:
+                        terrain_num = val
+                        break
+
+                # Garde-fous
+                if terrain_num == 0 or prix_num == 0:
+                    continue
+                if surf_num > 0 and terrain_num <= surf_num:
+                    continue
+                # garde-fou ratio : terrain/bati > 40 => donnee suspecte, on ecarte
+                if surf_num > 0 and (terrain_num / surf_num) > 40:
+                    continue
+
+                annonces.append({
+                    "source":          "Bien'ici",
+                    "url":             lien_complet,
+                    "titre":           texte[:90],
+                    "adresse":         ville,
+                    "prix":            prix_num,
+                    "surface":         surf_num,
+                    "surface_terrain": terrain_num,
+                    "type":            type_bien,
+                    "description":     texte[:1500],
+                    "ville":           ville,
+                })
             except Exception:
                 continue
     except Exception as e:
@@ -444,65 +475,61 @@ def analyser_avec_claude(annonce: dict, region: str) -> dict | None:
     """
     client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
-    prompt = f"""Tu es un expert marchand de biens en France couvrant 3 régions dans un rayon de 40km :
-- Île-de-France étendue (Paris, Versailles, Melun, Meaux, Évry, Cergy, Mantes, Dammarie-les-Lys…)
-- Grand Lyon (Lyon, Villeurbanne, Bron, Caluire, Vienne, Bourgoin-Jallieu, L'Isle-d'Abeau…)
-- Grand Avignon (Avignon, Carpentras, Orange, Apt, Cavaillon, L'Isle-sur-la-Sorgue, Uzès, Gordes, Lourmarin…)
+    ratio = 0
+    if annonce.get("surface", 0) > 0:
+        ratio = round(annonce["surface_terrain"] / annonce["surface"], 1)
 
-OBJECTIF PRINCIPAL : évaluer le potentiel de DIVISION PARCELLAIRE (terrain divisible en lots constructibles) ET de division immobilière (découpe d'immeuble en lots).
+    prompt = f"""Tu es un expert en DETACHEMENT PARCELLAIRE (division de terrain) en France.
+Regions : Grand Paris, Grand Lyon, Grand Avignon - couronne periurbaine.
 
-Analyse cette annonce et retourne UNIQUEMENT un JSON valide, sans markdown :
+OBJECTIF : evaluer si le TERRAIN de ce bien permet de DETACHER au moins 1 lot constructible
+revendable, en conservant la maison existante sur sa propre parcelle.
+
+DONNEES DU BIEN :
+- Ville : {annonce['ville']} (region: {region})
+- Prix affiche : {annonce['prix']:,} EUR
+- Surface habitable maison : {annonce.get('surface', 0)} m2
+- Surface TERRAIN totale : {annonce.get('surface_terrain', 0)} m2
+- Ratio terrain/bati : {ratio}
+- Description : {annonce['description'][:1500]}
+
+METHODE D'EVALUATION :
+- Emprise maison + jardin d'agrement a conserver : compter ~400-600 m2 autour du bati.
+- Surface detachable = terrain total - emprise conservee.
+- Un lot constructible viable en zone pavillonnaire = 400 m2 minimum.
+- Plus le ratio terrain/bati est eleve, plus le potentiel est fort.
+- Zone U ou AU = constructible. Zone A ou N = detachement interdit.
+- Mefiance zones AOC viticoles (Avignon/Gard) et zones naturelles (bords de Rhone).
+- Un terrain en angle, ou avec acces independant possible sur rue, est un atout majeur.
+
+Retourne UNIQUEMENT un JSON valide, sans markdown :
 {{
-  "type": "<Immeuble|Maison|Appartement|Mixte|Rural|Terrain>",
-  "region": "<idf|lyon|avignon>",
-  "adresse": "<adresse complète extraite>",
-  "prix": <prix annoncé en euros>,
-  "surface": <surface habitable en m² ou 0>,
-  "surface_terrain": <surface terrain en m² ou 0>,
-  "annee": <année construction ou 0>,
-  "anciennete": <estimation jours en ligne ou 30>,
-  "dpe": "<A|B|C|D|E|F|G|NC>",
-  "etat": "<excellent|bon|moyen|mauvais>",
-  "retour_vente": <true si compromis caduc ou retour sur marché>,
-  "agence": "<nom agence ou Particulier>",
-
-  "score_decoupe": <0-100 potentiel division immeuble en lots>,
-  "score_parcellaire": <0-100 potentiel division terrain en parcelles>,
-  "score_marge": <0-100 rentabilité de l'opération>,
-  "score_nego": <0-100 potentiel de négociation>,
-  "score_total": <0-100 score global pondéré>,
-
-  "decoupes_possibles": <0-8 nombre de lots immobiliers>,
-  "parcelles_possibles": <0-6 nombre de parcelles terrain>,
-  "surface_parcelle_min": <m² minimum par parcelle selon PLU estimé ou 0>,
-  "type_division": "<immeuble|parcellaire|les_deux|aucun>",
-
-  "plu": "<zonage PLU estimé et règles clés>",
-  "revente": <prix de revente global estimé après optimisation>,
-  "revente_par_parcelle": <prix moyen par parcelle ou 0>,
-
-  "urgence": "<faible|moyenne|haute|critique>",
-  "recommandation": "<2-3 phrases d'action concrète pour un MDB>",
+  "type": "{annonce.get('type', 'Maison')}",
+  "region": "{region}",
+  "adresse": "{annonce['ville']}",
+  "prix": {annonce['prix']},
+  "surface": {annonce.get('surface', 0)},
+  "surface_terrain": {annonce.get('surface_terrain', 0)},
+  "detachable": <true si au moins 1 lot detachable, sinon false>,
+  "parcelles_possibles": <nombre de lots detachables estimes, 0 a 4>,
+  "surface_parcelle_min": <m2 estimes du plus petit lot detachable>,
+  "score_parcellaire": <0-100 : potentiel de detachement>,
+  "score_total": <0-100 : identique au score_parcellaire>,
+  "score_decoupe": 0,
+  "zone_plu_estimee": "<U|AU|A|N|inconnue>",
+  "anciennete": 30,
+  "retour_vente": false,
+  "recommandation": "<2-3 phrases concretes : combien de lots, ou, quelles verifications PLU>",
   "signaux": ["<signal1>", "<signal2>", "<signal3>"],
   "risques": ["<risque1>", "<risque2>"],
-  "opportunites": ["<opp1>", "<opp2>"],
-  "specificite_region": "<particularité marché local : prix m², tendance DVF>"
+  "specificite_region": "<prix du m2 terrain a batir estime dans cette commune>"
 }}
 
-Critères division parcellaire :
-- Terrain > 800m² → potentiel
-- Zone U ou AU → constructible
-- Zone A ou N → division interdite
-- Avignon/Gard : détecter zones AOC (Côtes du Rhône, Luberon, Ventoux) → division viticole interdite
-- Grand Lyon : noter zones naturelles Rhône (N) non constructibles
-
-Annonce à analyser (région: {region}) :
-Source : {annonce['source']}
-URL : {annonce.get('url', '—')}
-Ville : {annonce['ville']}
-Description : {annonce['description'][:2000]}
-Prix observé : {annonce['prix']:,} €
-Surface observée : {annonce['surface']} m²
+REGLE DE SCORE :
+- detachable=false => score_parcellaire entre 0 et 40.
+- detachable=true, 1 lot => score_parcellaire entre 55 et 75.
+- detachable=true, 2 lots ou plus => score_parcellaire entre 75 et 95.
+- score_total = score_parcellaire.
 """
 
     try:
@@ -568,25 +595,19 @@ def filtrer_annonces(annonces: list[dict]) -> list[dict]:
     for a in annonces:
         if not a:
             continue
-        # Filtre score
-        score_ok = (
-            a.get("score_decoupe", 0)     >= CONFIG["score_decoupe_min"] or
-            a.get("score_parcellaire", 0) >= CONFIG["score_parcellaire_min"]
-        ) and a.get("score_total", 0) >= CONFIG["score_total_min"]
+        # Filtre detachement : Claude juge l'annonce detachable
+        detach_ok = a.get("detachable", False) is True
+
+        # Filtre score parcellaire
+        score_ok = a.get("score_parcellaire", 0) >= CONFIG["score_parcellaire_min"]
 
         # Filtre prix
         prix_ok = 0 < a.get("prix", 0) <= CONFIG["prix_max"]
 
-        # Filtre surface
-        surf_ok = a.get("surface", 0) >= CONFIG["surface_min_m2"]
+        # Filtre terrain (le seul critere de surface qui compte ici)
+        terrain_ok = a.get("surface_terrain", 0) >= CONFIG["terrain_min_m2"]
 
-        # Filtre marge
-        marge_ok = a.get("taux_marge", 0) >= CONFIG["taux_marge_min_pct"]
-
-        # Filtre type
-        type_ok = a.get("type", "Autre") in CONFIG["types_biens"]
-
-        if score_ok and prix_ok and surf_ok and type_ok:
+        if detach_ok and score_ok and prix_ok and terrain_ok:
             retenues.append(a)
 
     # Trier par score total décroissant
@@ -1075,7 +1096,7 @@ def run(test_mode: bool = False):
     else:
         print("\n[TEST] Push et email non envoyés en mode test")
         print("[TEST] Exemple email HTML généré dans email_preview.html")
-        with open("email_preview.html", "w") as f:
+        with open("email_preview.html", "w", encoding="utf-8") as f:
             f.write(generer_html_email(annonces))
 
     # 3. Sauvegarde JSON
